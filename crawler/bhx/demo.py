@@ -160,9 +160,9 @@ async def main(concurrency: int = 4):
                                         fetcher.token, fetcher.deviceid)
         
         # test thử 1 store
-        stores = stores[77:100]
+        stores = stores[450:]
 
-        # 3. Crawl productá
+        # 3. Crawl product
         start = time.time()
         await asyncio.gather(
             *[ fetcher.crawl_store(s, categories, prov)

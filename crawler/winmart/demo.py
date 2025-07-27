@@ -2,7 +2,6 @@ import asyncio
 import sys
 import time
 import logging
-import json
 from pymongo import UpdateOne
 from tqdm.asyncio import tqdm
 from crawler.winmart.fetch_branches import fetch_branches
@@ -102,12 +101,12 @@ class WinMartFetcher:
         elapsed = time.time() - start_time
         logger.info(f"✅ Total time: {elapsed:.2f} seconds")
 
-async def main(concurrency: int = 3):
+async def main(concurrency):
     fetcher = WinMartFetcher(concurrency)
     await fetcher.init()
     await fetcher.run()
 
-def run_sync(concurrency: int = 3):
+def run_sync(concurrency):
     if sys.platform.startswith("win"):
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
