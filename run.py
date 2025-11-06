@@ -3,4 +3,4 @@
 from crawler.winmart.demo import run_sync
 
 if __name__ == "__main__":
-    run_sync(concurrency=5)
+    run_sync(concurrency=2)
