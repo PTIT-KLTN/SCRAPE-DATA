@@ -37,6 +37,11 @@ async def extract_best_price(product: dict) -> dict:
 async def process_product_data(raw: List[dict], category: str, store_id: int, db) -> List[UpdateOne]:
 
     coll_name = category.replace(" ", "_").lower()
+
+    # nếu coll_name chưa có trong db
+    if coll_name not in await db.list_collection_names():
+        await db.create_collection(coll_name)
+
     coll = db[coll_name]
     ops = []
     

@@ -38,4 +38,11 @@ coverage.xml
 # Environment variables file
 .env
 env
+*.log
 
+.pytest_cache/
+
+backup
+temp
+
+celerybeat-schedule.*

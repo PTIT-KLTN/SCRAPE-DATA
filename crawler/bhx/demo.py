@@ -8,6 +8,7 @@ from crawler.bhx.fetch_store_by_province import fetch_stores_async
 from crawler.bhx.fetch_full_location import fetch_full_location_data
 from crawler.bhx.fetch_menus_for_store import fetch_menus_for_store
 from db.db_async import get_db
+import json
 
 from crawler.bhx.process_data import process_product_data
 from crawler.process_data.process import CATEGORIES_MAPPING_BHX
@@ -44,12 +45,8 @@ class BHXDataFetcher:
     async def close(self):
         await self.session.close()
 
-    async def close(self):
-        await self.session.close()
-
     async def fetch_categories(self, province, ward, store):
-        raw = await fetch_menus_for_store(province, ward, store,
-                                          self.token, self.deviceid)
+        raw = await fetch_menus_for_store(province, ward, store, self.token, self.deviceid)
         cats = []
         for m in raw:
             for c in m.get("childrens", []):
@@ -122,6 +119,7 @@ class BHXDataFetcher:
 
         # build and write ops
         ops = await process_product_data(allp, cat["name"], store_id, self.db)
+
         if ops:
             coll = self.db[cat["name"].replace(" ","_").lower()]
             result = await coll.bulk_write(ops, ordered=False)
@@ -137,45 +135,107 @@ class BHXDataFetcher:
                 logger.error(f"Network error: {e}")
             except Exception as e:
                 logger.error(f"Unexpected error: {e}")
+                print(e)
+
+    async def crawl_single_store(self, store_id: int, province_id: int = 3, ward_id: int = 4946, district_id: int = 0):
+        """Crawl một store cụ thể theo store_id"""
+        try:
+            # 1. Get categories from sample store
+            categories = await self.fetch_categories(province_id, ward_id, store_id)
+            
+            # 2. Create store object for crawling
+            store = {
+                "storeId": store_id,
+                "wardId": ward_id,
+                "districtId": district_id
+            }
+            
+            # 3. Crawl the specific store
+            start_time = time.time()
+            await self.crawl_store(store, categories, province_id)
+            end_time = time.time()
+            
+            elapsed = end_time - start_time
+            logger.info(f"✅ Store {store_id} crawled in {elapsed:.2f} seconds")
+            
+            return {
+                'status': 'success',
+                'store_id': store_id,
+                'processing_time': elapsed,
+                'categories_count': len(categories)
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error crawling store {store_id}: {e}")
+            return {
+                'status': 'error',
+                'store_id': store_id,
+                'error': str(e)
+            }
         
 
-async def main(concurrency: int = 4):
-    fetcher = BHXDataFetcher(concurrency=concurrency)
+async def main(concurrency, store_id=None, province_id=3, ward_id=4946, district_id=0):
+    """Main function - updated to support specific store_id"""
+    fetcher = BHXDataFetcher(concurrency)
     await fetcher.init()
-    start = None
-    end = None
-    try:
-        # 1. Categories from any sample store
-        prov, ward, store0 = 3, 4946, 2087
-        categories = await fetcher.fetch_categories(prov, ward, store0)
     
-        # 2. Get stores in HCM
-        full = await fetch_full_location_data(fetcher.token, fetcher.deviceid)
-        provinces = [p for p in full.get("provinces",[]) if p["name"].strip() == "TP. Hồ Chí Minh"]
-        if not provinces:
-            logger.error("No provinces found for TP. Hồ Chí Minh")
-            return
+    try:
+        if store_id:
+            # Crawl specific store
+            result = await fetcher.crawl_single_store(store_id, province_id, ward_id, district_id)
+            return result
+        else:
+            # Original logic - crawl multiple stores in HCM
+            # 1. Categories from any sample store
+            prov, ward, store0 = 3, 4946, 2087
+            categories = await fetcher.fetch_categories(prov, ward, store0)
         
-        stores = await fetch_stores_async(provinces[0]["id"],
-                                        fetcher.token, fetcher.deviceid)
-        
-        # test thử 1 store
-        stores = stores[450:]
+            # 2. Get stores in HCM
+            full = await fetch_full_location_data(fetcher.token, fetcher.deviceid)
+            provinces = [p for p in full.get("provinces",[]) if p["name"].strip() == "TP. Hồ Chí Minh"]
+            if not provinces:
+                logger.error("No provinces found for TP. Hồ Chí Minh")
+                return {'status': 'error', 'error': 'No provinces found for TP. Hồ Chí Minh'}
+            
+            stores = await fetch_stores_async(provinces[0]["id"], fetcher.token, fetcher.deviceid)
+            
+            # test thử 1 store
+            stores = stores[0:1]
 
-        # 3. Crawl product
-        start = time.time()
-        await asyncio.gather(
-            *[ fetcher.crawl_store(s, categories, prov)
-            for s in stores ]
-        )
+            # 3. Crawl products
+            start = time.time()
+            await asyncio.gather(
+                *[ fetcher.crawl_store(s, categories, prov) for s in stores ]
+            )
 
-        end = time.time()
-        logger.info(f"✅ Total time: {(end - start):.2f} minutes")
+            end = time.time()
+            elapsed = end - start
+            logger.info(f"✅ Total time: {elapsed:.2f} seconds")
+            
+            return {
+                'status': 'success',
+                'stores_count': len(stores),
+                'processing_time': elapsed
+            }
+            
     finally:
         await fetcher.close()
 
-def run_sync(concurrency: int = 4):
+
+def run_sync(concurrency=5, store_id=None, province_id=3, ward_id=4946, district_id=0):
+    """Sync wrapper - updated to support store_id"""
     if sys.platform.startswith("win"):
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
-    asyncio.run(main(concurrency))
+    return asyncio.run(main(concurrency, store_id, province_id, ward_id, district_id))
+
+
+# Async wrapper function for RabbitMQ integration  
+async def crawl_bhx_store_async(store_id: int, province_id: int = 3, ward_id: int = 4946, district_id: int = 0, concurrency: int = 5):
+    """Async function to be called from crawling_service.py"""
+    return await main(concurrency, store_id, province_id, ward_id, district_id)
+
+# Sync wrapper function for RabbitMQ integration  
+def crawl_bhx_store(store_id: int, province_id: int = 3, ward_id: int = 4946, district_id: int = 0, concurrency: int = 5):
+    """Function to be called from crawling_service.py"""
+    return run_sync(concurrency, store_id, province_id, ward_id, district_id)

@@ -20,7 +20,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class WinMartFetcher:
-    def __init__(self, concurrency: int = 10):
+    def __init__(self, concurrency: int = 3):
         self.branches = None
         self.categories = None
         self.db = None
@@ -40,7 +40,6 @@ class WinMartFetcher:
             except Exception as e:
                 logger.error(f"Exception while processing {args[0] if args else 'Unknown'}: {e}")
 
-
     async def crawl_store(self, store: dict):
         sid = store.get("code")
 
@@ -56,7 +55,7 @@ class WinMartFetcher:
         # Build category groups
         category_groups = {}
         for rec in records:
-            coll = rec.get("category", "general").replace(" ", "_").lower()
+            coll = rec.get("category").replace(" ", "_").lower()
             category_groups.setdefault(coll, []).append(rec)
 
         # Bulk upsert per collection
@@ -82,32 +81,102 @@ class WinMartFetcher:
             )
             logger.info(f"[{coll_name}] upserted: {bulk_result.upserted_count}")
 
-    async def run(self):
+    async def crawl_single_store(self, store_code: str):
+        """Crawl một store cụ thể theo store_code"""
+        try:
+            # Find store by code
+            target_store = None
+            for store in self.branches:
+                if store.get("code") == store_code:
+                    target_store = store
+                    break
+            
+            if not target_store:
+                logger.error(f"Store with code {store_code} not found")
+                return {
+                    'status': 'error',
+                    'store_code': store_code,
+                    'error': f'Store with code {store_code} not found'
+                }
+            
+            # Crawl the specific store
+            start_time = time.time()
+            await self.crawl_store(target_store)
+            end_time = time.time()
+            
+            elapsed = end_time - start_time
+            logger.info(f"✅ Store {store_code} crawled in {elapsed:.2f} seconds")
+            
+            return {
+                'status': 'success',
+                'store_code': store_code,
+                'store_name': target_store.get('name', ''),
+                'processing_time': elapsed,
+                'categories_count': len(self.categories) if self.categories else 0
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error crawling store {store_code}: {e}")
+            return {
+                'status': 'error',
+                'store_code': store_code,
+                'error': str(e)
+            }
+
+    async def run(self, store_code=None):
+        """Run crawling - updated to support specific store_code"""
         await self.init()
 
         start_time = time.time()
 
-        # test 1 store
-        self.branches = self.branches[6:9]
+        if store_code:
+            # Crawl specific store
+            result = await self.crawl_single_store(store_code)
+            return result
+        else:
+            # Original logic - crawl multiple stores
+            # test 1 store
+            test_branches = self.branches[6:9]
 
-        tasks = [self.sem_wrap(self.crawl_store, store) for store in self.branches]
+            tasks = [self.sem_wrap(self.crawl_store, store) for store in test_branches]
 
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                logger.warning(f"Store task {i} failed with: {result}")
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    logger.warning(f"Store task {i} failed with: {result}")
 
-        elapsed = time.time() - start_time
-        logger.info(f"✅ Total time: {elapsed:.2f} seconds")
+            elapsed = time.time() - start_time
+            logger.info(f"✅ Total time: {elapsed:.2f} seconds")
+            
+            return {
+                'status': 'success',
+                'stores_count': len(test_branches),
+                'processing_time': elapsed
+            }
 
-async def main(concurrency):
+
+async def main(concurrency, store_code=None):
+    """Main function - updated to support specific store_code"""
     fetcher = WinMartFetcher(concurrency)
-    await fetcher.init()
-    await fetcher.run()
+    result = await fetcher.run(store_code)
+    return result
 
-def run_sync(concurrency):
+
+def run_sync(concurrency=3, store_code=None):
+    """Sync wrapper - updated to support store_code"""
     if sys.platform.startswith("win"):
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
-    asyncio.run(main(concurrency))
+    return asyncio.run(main(concurrency, store_code))
+
+
+# Async wrapper function for RabbitMQ integration
+async def crawl_winmart_store_async(store_code: str, concurrency: int = 3):
+    """Async function to be called from crawling_service.py"""
+    return await main(concurrency, store_code)
+
+# Sync wrapper function for RabbitMQ integration
+def crawl_winmart_store(store_code: str, concurrency: int = 3):
+    """Function to be called from crawling_service.py"""
+    return run_sync(concurrency, store_code)
