@@ -16,7 +16,7 @@ from crawler.winmart.demo import crawl_winmart_store_async
 load_dotenv()
 
 broker_url = os.getenv('RABBITMQ_URL')
-celery_app = Celery('crawling_service', broker=broker_url)
+celery_app = Celery('scheduled_crawling', broker=broker_url)
 
 celery_app.conf.update(
     task_serializer='json',
@@ -31,10 +31,11 @@ celery_app.conf.update(
     worker_disable_rate_limits=True,
     task_ignore_result=True,
     worker_send_task_events=False,
+    # Celery Beat schedule - check database mỗi 60s
     beat_schedule={
         'check-and-execute-schedules': {
             'task': 'crawling_tasks.check_and_execute_schedules',
-            'schedule': 60.0,
+            'schedule': 60.0,  # Chạy mỗi 60 giây
         },
     }
 )
@@ -67,16 +68,13 @@ def run_async_safely(async_func, *args, **kwargs):
 
 @celery_app.task(bind=True)
 def crawl_bhx_store_task(self, task_id, store_id, province_id=3, ward_id=4946, district_id=0, concurrency=3):
-    """Celery task for BHX crawling"""
-    print(f"🚀 Starting BHX crawl: {task_id}, store: {store_id}, worker: {self.request.hostname}")
+    """
+    Celery task for BHX crawling - CHỈ DÙNG CHO SCHEDULED JOBS
+    On-demand crawls được xử lý bởi crawling_service.py
+    """
+    print(f"🚀 [SCHEDULED] Starting BHX crawl: {task_id}, store: {store_id}, worker: {self.request.hostname}")
     
     try:
-        # Chỉ gửi status update cho user tasks (không phải scheduled tasks)
-        is_scheduled = task_id.startswith('scheduled_')
-        
-        if not is_scheduled:
-            send_status_update(task_id, 'processing')
-        
         # Gọi async function từ demo.py
         result = run_async_safely(
             crawl_bhx_store_async,
@@ -88,35 +86,26 @@ def crawl_bhx_store_task(self, task_id, store_id, province_id=3, ward_id=4946, d
         )
         
         if result.get('status') == 'success':
-            if not is_scheduled:
-                send_status_update(task_id, 'completed', result)
-            print(f"✅ BHX crawl completed: {task_id}")
+            print(f"✅ [SCHEDULED] BHX crawl completed: {task_id}")
         else:
-            if not is_scheduled:
-                send_status_update(task_id, 'failed', error=result.get('error'))
-            print(f"❌ BHX crawl failed: {task_id}")
+            print(f"❌ [SCHEDULED] BHX crawl failed: {task_id}")
         
         return result
         
     except Exception as e:
         error_msg = str(e)
-        print(f"❌ BHX task error: {task_id} - {error_msg}")
-        if not task_id.startswith('scheduled_'):
-            send_status_update(task_id, 'failed', error=error_msg)
+        print(f"❌ [SCHEDULED] BHX task error: {task_id} - {error_msg}")
         return {'status': 'error', 'error': error_msg}
 
 @celery_app.task(bind=True)  
 def crawl_winmart_store_task(self, task_id, store_code, concurrency=2):
-    """Celery task for WinMart crawling"""
-    print(f"🚀 Starting WinMart crawl: {task_id}, store: {store_code}, worker: {self.request.hostname}")
+    """
+    Celery task for WinMart crawling - CHỈ DÙNG CHO SCHEDULED JOBS
+    On-demand crawls được xử lý bởi crawling_service.py
+    """
+    print(f"🚀 [SCHEDULED] Starting WinMart crawl: {task_id}, store: {store_code}, worker: {self.request.hostname}")
     
     try:
-        # Chỉ gửi status update cho user tasks (không phải scheduled tasks)
-        is_scheduled = task_id.startswith('scheduled_')
-        
-        if not is_scheduled:
-            send_status_update(task_id, 'processing')
-        
         # Gọi async function từ demo.py
         result = run_async_safely(
             crawl_winmart_store_async,
@@ -125,21 +114,15 @@ def crawl_winmart_store_task(self, task_id, store_code, concurrency=2):
         )
         
         if result.get('status') == 'success':
-            if not is_scheduled:
-                send_status_update(task_id, 'completed', result)
-            print(f"✅ WinMart crawl completed: {task_id}")
+            print(f"✅ [SCHEDULED] WinMart crawl completed: {task_id}")
         else:
-            if not is_scheduled:
-                send_status_update(task_id, 'failed', error=result.get('error'))
-            print(f"❌ WinMart crawl failed: {task_id}")
+            print(f"❌ [SCHEDULED] WinMart crawl failed: {task_id}")
         
         return result
         
     except Exception as e:
         error_msg = str(e)
-        print(f"❌ WinMart task error: {task_id} - {error_msg}")
-        if not task_id.startswith('scheduled_'):
-            send_status_update(task_id, 'failed', error=error_msg)
+        print(f"❌ [SCHEDULED] WinMart task error: {task_id} - {error_msg}")
         return {'status': 'error', 'error': error_msg}
 
 @celery_app.task(bind=True)
@@ -264,37 +247,5 @@ def execute_scheduled_crawl(self, schedule_id):
         print(f"❌ Scheduled crawl error: {e}")
         return {'status': 'error', 'error': str(e)}
 
-def send_status_update(task_id, status, result=None, error=None):
-    """Send status update via RabbitMQ"""
-    try:
-        rabbitmq_url = os.getenv('RABBITMQ_URL')
-        response_queue = os.getenv('RABBITMQ_CRAWLING_RESPONSE_QUEUE')
-        
-        connection = pika.BlockingConnection(pika.URLParameters(rabbitmq_url))
-        channel = connection.channel()
-        channel.queue_declare(queue=response_queue, durable=True)
-        
-        status_message = {
-            'action': 'task_status_update',
-            'task_id': task_id,
-            'status': status,
-            'timestamp': datetime.utcnow().isoformat(),
-            'service': 'celery_worker'
-        }
-        
-        if result:
-            status_message['result'] = result
-        if error:
-            status_message['error'] = error
-        
-        channel.basic_publish(
-            exchange='',
-            routing_key=response_queue,
-            body=json.dumps(status_message, ensure_ascii=False, default=str),
-            properties=pika.BasicProperties(delivery_mode=2)
-        )
-        
-        connection.close()
-        
-    except Exception as e:
-        print(f"❌ Status update failed: {task_id} - {e}")
+# Đã xóa send_status_update vì scheduled jobs không cần gửi status về Main Service
+# Main Service chỉ nhận status từ crawling_service.py cho on-demand crawls
