@@ -17,8 +17,9 @@ load_dotenv()
 
 def _ensure_event_loop_policy() -> None:
 
-    if sys.platform.startswith("win"):
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    # if sys.platform.startswith("win"):
+    #     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    pass
 
 
 def _run_coroutine_in_fresh_loop(coro):

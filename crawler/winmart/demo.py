@@ -178,9 +178,9 @@ async def main(concurrency, store_code=None):
 
 def run_sync(concurrency=3, store_code=None):
     """Sync wrapper - updated to support store_code"""
-    if sys.platform.startswith("win"):
-        # aiohttp/motor tend to be more stable with SelectorEventLoop on Windows
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    # if sys.platform.startswith("win"):
+    #     # aiohttp/motor tend to be more stable with SelectorEventLoop on Windows
+    #     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
     return asyncio.run(main(concurrency, store_code))
 

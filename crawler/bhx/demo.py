@@ -236,9 +236,9 @@ async def main(concurrency, store_id=None, province_id=3, ward_id=4946, district
 
 def run_sync(concurrency=5, store_id=None, province_id=3, ward_id=4946, district_id=0):
     """Sync wrapper - updated to support store_id"""
-    if sys.platform.startswith("win"):
-        # aiohttp tends to be more stable with Selector loop on Windows
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    # if sys.platform.startswith("win"):
+    #     # aiohttp tends to be more stable with Selector loop on Windows
+    #     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
     return asyncio.run(main(concurrency, store_id, province_id, ward_id, district_id))
 
