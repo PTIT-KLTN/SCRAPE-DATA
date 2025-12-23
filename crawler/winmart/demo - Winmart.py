@@ -61,7 +61,7 @@ class WinMartFetcher:
         records = await process_products_batch(raws, self.db)
         if not records:
             logger.error(f"No valid records for store {sid}, skipping.")
-            return {"ok": False, "raws": len(raws) if raws is not None else 0, "records": 0}
+            return
 
         # Build category groups
         category_groups = {}
@@ -92,16 +92,13 @@ class WinMartFetcher:
             )
             logger.info(f"[{coll_name}] upserted: {bulk_result.upserted_count}")
 
-        return {"ok": True, "raws": len(raws) if raws is not None else 0, "records": len(records)}
-
-
     async def crawl_single_store(self, store_code: str):
         """Crawl một store cụ thể theo store_code"""
         try:
             # Find store by code
             target_store = None
             for store in self.branches:
-                if str(store.get("code")) == str(store_code):
+                if store.get("code") == store_code:
                     target_store = store
                     break
             
@@ -115,19 +112,7 @@ class WinMartFetcher:
             
             # Crawl the specific store
             start_time = time.time()
-            crawl_result = await self.crawl_store(target_store)
-            if isinstance(crawl_result, dict) and crawl_result.get('ok') is False:
-                end_time = time.time()
-                elapsed = end_time - start_time
-                logger.info(f"⚠️ Store {store_code} finished but no valid records (raws={crawl_result.get('raws')}, records=0)")
-                return {
-                    'status': 'error',
-                    'store_code': store_code,
-                    'store_name': target_store.get('name', ''),
-                    'processing_time': elapsed,
-                    'categories_count': len(self.categories) if self.categories else 0,
-                    'error': 'No valid records'
-                }
+            await self.crawl_store(target_store)
             end_time = time.time()
             
             elapsed = end_time - start_time
@@ -192,13 +177,6 @@ async def main(concurrency, store_code=None):
 
 
 def run_sync(concurrency=3, store_code=None):
-    # Guard: do not call asyncio.run inside an existing loop
-    try:
-        asyncio.get_running_loop()
-        raise RuntimeError("run_sync() cannot be called inside a running event loop. Use crawl_winmart_store_async().")
-    except RuntimeError:
-        pass
-
     """Sync wrapper - updated to support store_code"""
     # if sys.platform.startswith("win"):
     #     # aiohttp/motor tend to be more stable with SelectorEventLoop on Windows
