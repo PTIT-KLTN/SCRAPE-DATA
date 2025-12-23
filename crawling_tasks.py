@@ -50,7 +50,7 @@ def _ensure_event_loop_policy() -> None:
     """On Windows, prefer Selector loop for better compatibility with aiohttp."""
     # if sys.platform.startswith("win"):
     #     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    pass
+    return
 
 
 def _get_worker_loop() -> asyncio.AbstractEventLoop:

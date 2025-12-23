@@ -34,13 +34,14 @@ class WinMartFetcher:
         self._db_client = getattr(self.db, "client", None)
 
     async def close(self):
-        """Best-effort cleanup to avoid leaking background tasks bound to this event loop."""
-        try:
-            if self._db_client is not None:
-                # motor's close() is sync
-                self._db_client.close()
-        except Exception as e:
-            logger.warning(f"Failed to close Mongo client cleanly: {e}")
+        # """Best-effort cleanup to avoid leaking background tasks bound to this event loop."""
+        # try:
+        #     if self._db_client is not None:
+        #         # motor's close() is sync
+        #         self._db_client.close()
+        # except Exception as e:
+        #     logger.warning(f"Failed to close Mongo client cleanly: {e}")
+        return
 
     async def sem_wrap(self, coro, *args):
         async with self.sem:

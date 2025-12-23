@@ -43,19 +43,20 @@ class BHXDataFetcher:
         self.session = aiohttp.ClientSession()
 
     async def close(self):
-        # Close HTTP session
-        try:
-            if self.session and not self.session.closed:
-                await self.session.close()
-        except Exception:
-            pass
+        # # Close HTTP session
+        # try:
+        #     if self.session and not self.session.closed:
+        #         await self.session.close()
+        # except Exception:
+        #     pass
 
-        try:
-            client = getattr(self.db, "client", None)
-            if client is not None:
-                client.close()
-        except Exception:
-            pass
+        # try:
+        #     client = getattr(self.db, "client", None)
+        #     if client is not None:
+        #         client.close()
+        # except Exception:
+        #     pass
+        return
 
     async def fetch_categories(self, province, ward, store):
         raw = await fetch_menus_for_store(province, ward, store, self.token, self.deviceid)
