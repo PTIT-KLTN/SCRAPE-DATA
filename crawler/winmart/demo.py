@@ -24,12 +24,23 @@ class WinMartFetcher:
         self.branches = None
         self.categories = None
         self.db = None
+        self._db_client = None
         self.sem = asyncio.Semaphore(concurrency)
 
     async def init(self):
         self.branches = await fetch_branches()
         self.categories = await fetch_categories()
         self.db = get_db()
+        self._db_client = getattr(self.db, "client", None)
+
+    async def close(self):
+        """Best-effort cleanup to avoid leaking background tasks bound to this event loop."""
+        try:
+            if self._db_client is not None:
+                # motor's close() is sync
+                self._db_client.close()
+        except Exception as e:
+            logger.warning(f"Failed to close Mongo client cleanly: {e}")
 
     async def sem_wrap(self, coro, *args):
         async with self.sem:
@@ -128,32 +139,34 @@ class WinMartFetcher:
         await self.init()
 
         start_time = time.time()
+        try:
+            if store_code:
+                # Crawl specific store
+                result = await self.crawl_single_store(store_code)
+                return result
+            else:
+                # Original logic - crawl multiple stores
+                # test 1 store
+                test_branches = self.branches[6:9]
 
-        if store_code:
-            # Crawl specific store
-            result = await self.crawl_single_store(store_code)
-            return result
-        else:
-            # Original logic - crawl multiple stores
-            # test 1 store
-            test_branches = self.branches[6:9]
+                tasks = [self.sem_wrap(self.crawl_store, store) for store in test_branches]
 
-            tasks = [self.sem_wrap(self.crawl_store, store) for store in test_branches]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+                for i, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        logger.warning(f"Store task {i} failed with: {result}")
 
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    logger.warning(f"Store task {i} failed with: {result}")
+                elapsed = time.time() - start_time
+                logger.info(f"✅ Total time: {elapsed:.2f} seconds")
 
-            elapsed = time.time() - start_time
-            logger.info(f"✅ Total time: {elapsed:.2f} seconds")
-            
-            return {
-                'status': 'success',
-                'stores_count': len(test_branches),
-                'processing_time': elapsed
-            }
+                return {
+                    'status': 'success',
+                    'stores_count': len(test_branches),
+                    'processing_time': elapsed
+                }
+        finally:
+            await self.close()
 
 
 async def main(concurrency, store_code=None):
@@ -166,7 +179,8 @@ async def main(concurrency, store_code=None):
 def run_sync(concurrency=3, store_code=None):
     """Sync wrapper - updated to support store_code"""
     if sys.platform.startswith("win"):
-        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+        # aiohttp/motor tend to be more stable with SelectorEventLoop on Windows
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
     return asyncio.run(main(concurrency, store_code))
 

@@ -3,6 +3,7 @@ from celery import Celery
 import os
 import asyncio
 import sys
+import atexit
 from datetime import datetime
 import json
 import pika
@@ -41,22 +42,79 @@ celery_app.conf.update(
     }
 )
 
-def run_async_safely(async_func, *args, **kwargs):
+
+_WORKER_LOOP: asyncio.AbstractEventLoop | None = None
+
+
+def _ensure_event_loop_policy() -> None:
+    """On Windows, prefer Selector loop for better compatibility with aiohttp."""
+    if sys.platform.startswith("win"):
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+
+def _get_worker_loop() -> asyncio.AbstractEventLoop:
+    global _WORKER_LOOP
+    _ensure_event_loop_policy()
+
+    if _WORKER_LOOP is None or _WORKER_LOOP.is_closed():
+        _WORKER_LOOP = asyncio.new_event_loop()
+
+    # Make sure this loop is the current loop for the current thread.
+    asyncio.set_event_loop(_WORKER_LOOP)
+    return _WORKER_LOOP
+
+
+def _cleanup_leaked_tasks(loop: asyncio.AbstractEventLoop) -> None:
+    """Cancel any pending tasks that were leaked by libraries/crawler code."""
+    try:
+        pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+    except Exception:
+        pending = []
+
+    if not pending:
+        return
+
+    for task in pending:
+        task.cancel()
 
     try:
-        if sys.platform.startswith("win"):
-            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+    except Exception:
+        pass
 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+
+def _close_worker_loop() -> None:
+    global _WORKER_LOOP
+    if _WORKER_LOOP is None or _WORKER_LOOP.is_closed():
+        return
+    try:
+        _cleanup_leaked_tasks(_WORKER_LOOP)
+        _WORKER_LOOP.run_until_complete(_WORKER_LOOP.shutdown_asyncgens())
+    except Exception:
+        pass
+    finally:
         try:
-            return loop.run_until_complete(async_func(*args, **kwargs))
-        finally:
-            loop.close()
-            
+            asyncio.set_event_loop(None)
+        except Exception:
+            pass
+        _WORKER_LOOP.close()
+        _WORKER_LOOP = None
+
+
+atexit.register(_close_worker_loop)
+
+
+def run_async_safely(async_func, *args, **kwargs):
+    try:
+        loop = _get_worker_loop()
+        result = loop.run_until_complete(async_func(*args, **kwargs))
+
+        _cleanup_leaked_tasks(loop)
+        return result
+
     except Exception as e:
         print(f"❌ Async execution error: {e}")
-        return {'status': 'error', 'error': str(e)}
+        return {"status": "error", "error": str(e)}
 
 
 @celery_app.task(bind=True)

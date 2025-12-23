@@ -43,7 +43,19 @@ class BHXDataFetcher:
         self.session = aiohttp.ClientSession()
 
     async def close(self):
-        await self.session.close()
+        # Close HTTP session
+        try:
+            if self.session and not self.session.closed:
+                await self.session.close()
+        except Exception:
+            pass
+
+        try:
+            client = getattr(self.db, "client", None)
+            if client is not None:
+                client.close()
+        except Exception:
+            pass
 
     async def fetch_categories(self, province, ward, store):
         raw = await fetch_menus_for_store(province, ward, store, self.token, self.deviceid)
@@ -185,7 +197,7 @@ async def main(concurrency, store_id=None, province_id=3, ward_id=4946, district
             result = await fetcher.crawl_single_store(store_id, province_id, ward_id, district_id)
             return result
         else:
-            # Original logic - crawl multiple stores in HCM
+
             # 1. Categories from any sample store
             prov, ward, store0 = 3, 4946, 2087
             categories = await fetcher.fetch_categories(prov, ward, store0)
@@ -225,7 +237,8 @@ async def main(concurrency, store_id=None, province_id=3, ward_id=4946, district
 def run_sync(concurrency=5, store_id=None, province_id=3, ward_id=4946, district_id=0):
     """Sync wrapper - updated to support store_id"""
     if sys.platform.startswith("win"):
-        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+        # aiohttp tends to be more stable with Selector loop on Windows
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
     return asyncio.run(main(concurrency, store_id, province_id, ward_id, district_id))
 

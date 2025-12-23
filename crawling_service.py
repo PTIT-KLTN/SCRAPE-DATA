@@ -4,6 +4,7 @@ import os
 import asyncio
 import threading
 import sys
+import contextlib
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -12,6 +13,37 @@ from crawler.bhx.demo import crawl_bhx_store_async
 from crawler.winmart.demo import crawl_winmart_store_async
 
 load_dotenv()
+
+
+def _ensure_event_loop_policy() -> None:
+
+    if sys.platform.startswith("win"):
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+
+def _run_coroutine_in_fresh_loop(coro):
+
+    _ensure_event_loop_policy()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        # Cancel pending tasks to avoid callbacks hitting a closed loop.
+        with contextlib.suppress(Exception):
+            pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+            for t in pending:
+                t.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
+        with contextlib.suppress(Exception):
+            loop.run_until_complete(loop.shutdown_asyncgens())
+
+        with contextlib.suppress(Exception):
+            asyncio.set_event_loop(None)
+
+        loop.close()
 
 
 class CeleryCrawlingService:
@@ -85,33 +117,26 @@ class CeleryCrawlingService:
         task_id = request.get('task_id')
         chain = request.get('chain', 'BHX').upper()
         try:
-            if sys.platform.startswith('win'):
-                asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+            # Select coroutine based on chain.
+            if chain == 'BHX':
+                coro = crawl_bhx_store_async(
+                    store_id=request.get('storeId'),
+                    province_id=request.get('provinceId', 3),
+                    ward_id=request.get('WardId', 4946) if request.get('WardId') is not None else request.get('wardId', 4946),
+                    district_id=request.get('districtId', 0),
+                    concurrency=request.get('concurrency', 3),
+                )
+            elif chain in ('WM', 'WINMART'):
+                # For WinMart, convert storeId to string for store_code
+                coro = crawl_winmart_store_async(
+                    store_code=str(request.get('storeId')),
+                    concurrency=request.get('concurrency', 2),
+                )
+            else:
+                raise ValueError(f"Unknown chain: {chain}")
 
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                # Select coroutine based on chain.
-                if chain == 'BHX':
-                    coro = crawl_bhx_store_async(
-                        store_id=request.get('storeId'),
-                        province_id=request.get('provinceId', 3),
-                        ward_id=request.get('WardId', 4946) if request.get('WardId') is not None else request.get('wardId', 4946),
-                        district_id=request.get('districtId', 0),
-                        concurrency=request.get('concurrency', 3),
-                    )
-                elif chain in ('WM', 'WINMART'):
-                    # For WinMart, convert storeId to string for store_code
-                    coro = crawl_winmart_store_async(
-                        store_code=str(request.get('storeId')),
-                        concurrency=request.get('concurrency', 2),
-                    )
-                else:
-                    raise ValueError(f"Unknown chain: {chain}")
-
-                result = loop.run_until_complete(coro)
-            finally:
-                loop.close()
+            # Run with fresh event loop + safe cleanup in this thread.
+            result = _run_coroutine_in_fresh_loop(coro)
 
             if not isinstance(result, dict):
                 raise RuntimeError(f"Crawler returned non-dict result: {result}")
