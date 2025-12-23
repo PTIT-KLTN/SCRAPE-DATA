@@ -47,7 +47,13 @@ def run_async_safely(async_func, *args, **kwargs):
         if sys.platform.startswith("win"):
             asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
-        return asyncio.run(async_func(*args, **kwargs))
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(async_func(*args, **kwargs))
+        finally:
+            loop.close()
+            
     except Exception as e:
         print(f"❌ Async execution error: {e}")
         return {'status': 'error', 'error': str(e)}

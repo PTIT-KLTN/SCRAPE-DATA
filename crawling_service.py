@@ -53,16 +53,17 @@ class CeleryCrawlingService:
                 self.send_response(response)
 
             elif action == 'crawl_store':
+
                 correlation_id = request.get('correlationId')
                 task_id = request.get('task_id')
-
-                self.send_response({
+                processing_response = {
                     'action': 'task_status_update',
                     'task_id': task_id,
                     'status': 'processing',
-                    'correlationId': correlation_id, 
+                    'correlationId': correlation_id,
                     'timestamp': datetime.utcnow().isoformat(),
-                })
+                }
+                self.send_response(processing_response)
 
                 thread = threading.Thread(
                     target=self._process_crawl_async,
@@ -80,48 +81,56 @@ class CeleryCrawlingService:
             ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
 
     def _process_crawl_async(self, request: dict) -> None:
-        """Run an asynchronous crawl in a thread and send status updates."""
+
         task_id = request.get('task_id')
         chain = request.get('chain', 'BHX').upper()
         try:
-
             if sys.platform.startswith('win'):
                 asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
-            if chain == 'BHX':
-                result = asyncio.run(
-                    crawl_bhx_store_async(
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                # Select coroutine based on chain.
+                if chain == 'BHX':
+                    coro = crawl_bhx_store_async(
                         store_id=request.get('storeId'),
                         province_id=request.get('provinceId', 3),
-                        ward_id=request.get('wardId', 4946),
+                        ward_id=request.get('WardId', 4946) if request.get('WardId') is not None else request.get('wardId', 4946),
                         district_id=request.get('districtId', 0),
                         concurrency=request.get('concurrency', 3),
                     )
-                )
-            elif chain in ('WM', 'WINMART'):
-                result = asyncio.run(
-                    crawl_winmart_store_async(
+                elif chain in ('WM', 'WINMART'):
+                    # For WinMart, convert storeId to string for store_code
+                    coro = crawl_winmart_store_async(
                         store_code=str(request.get('storeId')),
                         concurrency=request.get('concurrency', 2),
                     )
-                )
-            else:
-                raise ValueError(f"Unknown chain: {chain}")
+                else:
+                    raise ValueError(f"Unknown chain: {chain}")
 
-            # Send a completed status with the result payload back to main.
-            status_response = {
+                result = loop.run_until_complete(coro)
+            finally:
+                loop.close()
+
+            if not isinstance(result, dict):
+                raise RuntimeError(f"Crawler returned non-dict result: {result}")
+
+            status = 'completed' if result.get('status') == 'success' else 'failed'
+            response: dict[str, any] = {
                 'action': 'task_status_update',
                 'task_id': task_id,
-                'status': 'completed' if result.get('status') == 'success' else 'failed',
-                'result': result if result.get('status') == 'success' else None,
-                'error': result.get('error') if result.get('status') != 'success' else None,
+                'status': status,
                 'timestamp': datetime.utcnow().isoformat(),
             }
-            self.send_response(status_response)
-            print(f"✅ Crawl finished: {task_id}")
+            if status == 'completed':
+                response['result'] = result
+            else:
+                response['error'] = result.get('error') or 'Unknown error'
+            self.send_response(response)
+            print(f"✅ Crawl finished: {task_id} (status={status})")
 
         except Exception as e:
-
             print(f"❌ Crawl failed: {task_id} - {e}")
             error_response = {
                 'action': 'task_status_update',
